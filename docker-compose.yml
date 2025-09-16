@@ -1,0 +1,41 @@
+version: "3.9"
+
+services:
+  project-builder:
+    build: .
+    container_name: project-builder
+    ports:
+      - "8502:8502"               # Streamlit UI
+    env_file:
+      - .env                      # Put your keys & codefill flags here
+    environment:
+      # Sensible defaults (can be overridden in .env)
+      LLM_PROVIDER: "${LLM_PROVIDER:-groq}"
+      # Enable prestart code fill that reads the dump and writes files
+      CODEFILL_ENABLE: "${CODEFILL_ENABLE:-1}"
+      CODEFILL_ON_STARTUP: "${CODEFILL_ON_STARTUP:-1}"
+      CODEFILL_MODE: "${CODEFILL_MODE:-overwrite}"          # or "skip"
+      CODEFILL_CREATE_MISSING: "${CODEFILL_CREATE_MISSING:-1}"
+      CODEFILL_DUMP_FILE: "${CODEFILL_DUMP_FILE:-/workspace/dump.txt}"
+      # Streamlit server config
+      STREAMLIT_SERVER_PORT: "8502"
+      STREAMLIT_SERVER_ADDRESS: "0.0.0.0"
+
+    # Mounts:
+    # 1) The repo itself for hot-reload during dev
+    # 2) A dump file you paste in your repo (./dump.txt) -> container path used by prestart
+    # 3) Your host Projects folder so generated code lands on your machine (macOS path shown)
+    volumes:
+      - ./:/app
+      - ./dump.txt:/workspace/dump.txt:ro
+      - /Users/pranavsaji/Downloads/Projects:/workspace/Projects
+
+    # If you prefer to just run the CLI once (no UI), uncomment below:
+    # command: >
+    #   bash -lc "python -m structure_builder.cli
+    #             --dump /workspace/dump.txt
+    #             --dest /workspace/Projects
+    #             --mode overwrite"
+
+    # Restart policy for dev convenience
+    restart: unless-stopped

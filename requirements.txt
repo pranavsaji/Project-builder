@@ -1,0 +1,8 @@
+streamlit
+python-dotenv
+openai
+black
+rich
+groq
+requests
+urllib3<2

@@ -1,0 +1,71 @@
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+*.env
+
+# Streamlit
+.streamlit/
+.streamlit_tmp/
+
+# Project dumps / generated files
+dump.txt
+dump.md
+
+# Logs
+*.log
+logs/
+*.out
+*.err
+
+# Database
+*.db
+*.sqlite3
+dev.db
+
+# OS / Editor junk
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.bak
+*~
+
+# VSCode / IDE
+.vscode/
+.idea/
+*.iml
+
+# Testing / coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+
+# Node (if you add frontend later)
+node_modules/
+dist/
+build/
+
+# Docker
+*.pid
+*.seed
+*.pid.lock
+docker-data/
+
+# Secrets
+*.key
+*.pem
+*.crt
+secrets/
+secret.*
+!example.*
