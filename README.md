@@ -17,6 +17,9 @@ It ships with a **Streamlit UI** for interactive use and a **FastAPI backend** f
 * 🤖 **LLM integration (optional)**  
   OpenAI and Groq LLMs for backfilling missing files or extracting structured JSON.
 
+* 🔄 **Open your code directly in VS code**  
+    Click button to open the code in VS code
+    
 * 🛠️ **Streamlit UI (multi-page)**  
   Paste dumps, configure options, and build projects visually.
 

@@ -1,17 +1,25 @@
 """
 Streamlit page: Code Explorer & Exporter (v2, stateful & resilient)
 
-Fixes:
+Fixes & additions:
 - Persist scan results and selection in session_state so removing one file doesn't clear everything.
-- Add per-file ✕ buttons to remove single items from the selection.
+- Per-file ✕ buttons to remove single items from the selection.
 - DOCX export no longer crashes on binary/control chars (handled in tools/doc_export.py).
+- New: Open in editor
+  * Folder mode: Open base folder in editor + per-file Open buttons.
+  * ZIP mode: Materialize selection to a temp workspace and open in editor.
 """
 from __future__ import annotations
 
 import io
 import os
 import sys
+import shlex
+import time
+import shutil
 import zipfile
+import tempfile
+import subprocess
 from pathlib import Path
 from typing import Dict, List
 
@@ -42,6 +50,7 @@ with st.expander("Defaults & tips", expanded=False):
 - **Excludes** (by default): `.git`, `venv`, `.venv`, `node_modules`, `__pycache__`, `.pytest_cache`, `.mypy_cache`,
   `.ruff_cache`, `.tox`, `dist`, `build`, `.cache`.
 - If you change filters, hit **Rescan** to refresh results.
+- **New:** Use the **Open in editor** buttons to jump straight into VS Code (or your default editor).
         """
     )
 
@@ -68,12 +77,98 @@ with st.sidebar:
     )
     exclude_tokens = [t.strip() for t in excludes_text.split(",") if t.strip()]
 
-# Helper: robust rerun across Streamlit versions
+
+# Helpers
 def _rerun():
     try:
         st.rerun()
     except Exception:
         st.experimental_rerun()  # legacy
+
+
+def _launch_editor(target: Path, editor_preference: str | None = None) -> str:
+    """
+    Best-effort launcher for VS Code or any GUI editor.
+    Honors EDITOR_CMD if set (e.g., 'code -g').
+    """
+    if not target.exists():
+        return f"Path does not exist: {target}"
+
+    def _popen(cmd: list[str]) -> bool:
+        try:
+            subprocess.Popen(cmd)
+            return True
+        except Exception as e:
+            st.warning(f"Launch error with {cmd}: {e}")
+            return False
+
+    editor_cmd = os.getenv("EDITOR_CMD") or editor_preference
+    if editor_cmd:
+        cmd = shlex.split(editor_cmd) + [str(target)]
+        if _popen(cmd):
+            return f"Launched via EDITOR_CMD: `{editor_cmd}`"
+
+    if shutil.which("code"):
+        if _popen(["code", str(target)]):
+            return "Opened in VS Code (code)."
+    if shutil.which("subl"):
+        if _popen(["subl", str(target)]):
+            return "Opened in Sublime Text (subl)."
+    if shutil.which("atom"):
+        if _popen(["atom", str(target)]):
+            return "Opened in Atom."
+
+    if sys.platform == "darwin" and shutil.which("open"):
+        if _popen(["open", "-a", "Visual Studio Code", str(target)]):
+            return 'Opened in "Visual Studio Code" (open -a).'
+        if _popen(["open", str(target)]):
+            return "Opened with default application (open)."
+
+    if os.name == "nt":
+        try:
+            subprocess.Popen(["cmd", "/c", "start", "", str(target)], shell=True)
+            return "Opened with default application (start)."
+        except Exception as e:
+            return f"Failed to open on Windows: {e}"
+
+    if shutil.which("xdg-open"):
+        if _popen(["xdg-open", str(target)]):
+            return "Opened with default application (xdg-open)."
+
+    return (
+        "No suitable editor launcher found. Install VS Code and ensure `code` is on PATH, "
+        "or set EDITOR_CMD (e.g. 'code -g')."
+    )
+
+
+def _materialize_selection_to_temp(files: List[Dict]) -> Path:
+    """
+    Write selected in-memory files to a temporary workspace so they can be opened in an editor.
+    Returns the temp directory path.
+    """
+    base = Path(tempfile.gettempdir()) / "project_builder_zip_open" / str(int(time.time()))
+    for f in files:
+        rel = (f.get("rel_path") or f.get("path") or f.get("name") or "file.txt").lstrip("/\\")
+        dest = base / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        content = f.get("content", "")
+        try:
+            dest.write_text(content, encoding="utf-8", errors="replace")
+        except Exception:
+            # As a last resort, write bytes from UTF-8 replacement
+            dest.write_bytes(content.encode("utf-8", errors="replace"))
+    return base
+
+
+def _safe_project_name(name: str) -> str:
+    """Sanitize a project name for filenames."""
+    import re
+    s = (name or "").strip().strip("/\\")
+    if not s:
+        s = "project"
+    # allow letters, numbers, dot, underscore, hyphen; replace others with underscore
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", s)
+
 
 # ----------------------------
 # Tab 1: From folder path
@@ -133,7 +228,12 @@ with tab1:
     if results:
         st.success(f"Scanned {len(results)} file(s). Currently selected: **{len(selected)}**")
 
-        # Show selection with per-item remove buttons (✕)
+        # Quick open base in editor
+        if st.button("🖥️ Open base folder in editor", key="open_base_editor", type="secondary"):
+            msg = _launch_editor(base)
+            st.toast(msg)
+
+        # Show selection with per-item remove & open buttons
         st.markdown("#### Selected files")
         if not selected:
             st.info("No files selected. Click **Reset selection** to select all again.")
@@ -143,7 +243,7 @@ with tab1:
                 rel = f.get("rel_path") or f.get("path") or f.get("name")
                 size = f.get("size")
                 lang = f.get("language") or "text"
-                c1, c2, c3, c4 = st.columns([0.6, 6, 2, 1.4])
+                c1, c2, c3, c4, c5 = st.columns([0.6, 5.6, 2, 1.4, 1.8])
                 with c1:
                     if st.button("✕", key=f"rm_{i}_{rel}"):
                         to_remove_idx.append(i)
@@ -154,6 +254,15 @@ with tab1:
                 with c4:
                     with st.popover("Preview", use_container_width=True):
                         st.code(f.get("content", ""), language=lang)
+                with c5:
+                    # Open in editor (on-disk file)
+                    if st.button("Open", key=f"open_{i}_{rel}"):
+                        target = base / rel
+                        if target.exists():
+                            msg = _launch_editor(target)
+                            st.toast(msg)
+                        else:
+                            st.warning("File no longer exists on disk.")
 
             if to_remove_idx:
                 for idx in sorted(to_remove_idx, reverse=True):
@@ -167,8 +276,11 @@ with tab1:
         col1, col2, col3 = st.columns(3)
         filtered = selected  # alias for prior naming
 
-        # Build combined markdown
         combined_md = build_markdown_document(filtered, title="Code Export — Folder Mode", base_path=str(base))
+
+        # derive project name from folder and use it for .docx filename
+        project_name = _safe_project_name(base.name)
+        docx_filename = f"{project_name}_code.docx"
 
         with col1:
             st.download_button(
@@ -184,7 +296,7 @@ with tab1:
                 st.download_button(
                     "⬇️ Download .docx",
                     data=docx_bytes,
-                    file_name="code-export.docx",
+                    file_name=docx_filename,  # <-- project-based name
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     use_container_width=True,
                 )
@@ -206,70 +318,6 @@ with tab1:
                 with st.container(border=True):
                     st.markdown(f"**{r['rel_path']}**  \n_Size:_ {r['size']} bytes  \n_Language:_ `{r['language']}`")
                     st.code(r["content"], language=r["language"] or "text")
-
-        # ----------------------------
-        # Danger Zone: manage (remove) files/folders
-        # ----------------------------
-        with st.expander("🧹 Manage files & folders (Danger Zone)", expanded=False):
-            st.warning(
-                "These actions operate under the base folder only. "
-                "Use **Move to .trash** when unsure."
-            )
-
-            # Immediate children of root to allow high-level removal
-            try:
-                top_children = list_immediate_children(base)
-            except Exception as e:
-                top_children = []
-                st.exception(e)
-
-            st.markdown("**Immediate children under base**")
-            st.caption("Pick files/folders to remove as a whole. (This list is not affected by the file scan filters.)")
-            to_remove_choices = st.multiselect(
-                "Select items to remove (files or folders)",
-                options=top_children,
-                default=[],
-                key="danger_top_children",
-            )
-
-            st.markdown("**Or specify custom relative paths** (one per line)")
-            manual_remove = st.text_area("Relative paths to remove", value="", height=120, key="manual_remove")
-            manual_list = [line.strip() for line in manual_remove.splitlines() if line.strip()]
-
-            removal_mode = st.radio(
-                "Removal mode",
-                options=["Move to .trash (safe)", "Delete permanently"],
-                index=0,
-                horizontal=True,
-            )
-
-            confirm_text = st.text_input("Type YES to confirm", value="")
-            coldz1, coldz2 = st.columns([1, 1])
-            do_remove = coldz1.button("🚮 Execute removal", type="secondary", use_container_width=True)
-            if do_remove:
-                if confirm_text != "YES":
-                    st.error('Please type "YES" to confirm.')
-                else:
-                    rel_paths = to_remove_choices + manual_list
-                    rel_paths = sorted(set(rel_paths))
-                    if not rel_paths:
-                        st.info("Nothing selected.")
-                    else:
-                        try:
-                            if removal_mode.startswith("Move"):
-                                moved = move_to_trash(base, rel_paths)
-                                st.success(f"Moved {len(moved)} item(s) to {'.trash/'}")
-                                with st.expander("Details", expanded=False):
-                                    for m in moved:
-                                        st.write(f"- {m['rel_path']} ➜ {m['trash_target']}")
-                            else:
-                                deleted = permanent_delete(base, rel_paths)
-                                st.success(f"Permanently deleted {len(deleted)} item(s).")
-                                with st.expander("Details", expanded=False):
-                                    for d in deleted:
-                                        st.write(f"- {d['rel_path']} ({d['type']})")
-                        except Exception as e:
-                            st.exception(e)
     else:
         st.info("Enter a base folder and click **Scan folder**.")
 
@@ -295,7 +343,6 @@ with tab2:
             results_zip = []
 
         if results_zip:
-            # For ZIP flow we keep it simple: multi-select without per-row ✕.
             all_paths = [r["rel_path"] for r in results_zip]
             selected_zip = st.multiselect(
                 "Select files to include in export",
@@ -306,6 +353,13 @@ with tab2:
             selz = set(selected_zip)
             filtered_zip = [r for r in results_zip if r["rel_path"] in selz]
 
+            # Open selection in editor by materializing to a temp workspace
+            if st.button("🖥️ Open selection in editor (temp folder)", key="open_zip_selection"):
+                temp_dir = _materialize_selection_to_temp(filtered_zip)
+                msg = _launch_editor(temp_dir)
+                st.toast(msg)
+                st.caption(f"Temp workspace: `{temp_dir}`")
+
             with st.expander("🔎 Preview files", expanded=False):
                 for r in filtered_zip:
                     with st.container(border=True):
@@ -315,6 +369,10 @@ with tab2:
             combined_md_zip = build_markdown_document(filtered_zip, title="Code Export — ZIP Mode", base_path=upl.name)
             st.subheader("📄 Combined document (Markdown)")
             st.text_area("Copy-pastable document", value=combined_md_zip, height=300, key="md_zip")
+
+            # derive project name from uploaded zip filename (stem) and use it for .docx
+            zip_project_name = _safe_project_name(Path(upl.name).stem)
+            zip_docx_filename = f"{zip_project_name}_code.docx"
 
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -331,7 +389,7 @@ with tab2:
                     st.download_button(
                         "⬇️ Download .docx",
                         data=docx_bytes_zip,
-                        file_name="code-export-from-zip.docx",
+                        file_name=zip_docx_filename,  # <-- project-based name
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         use_container_width=True,
                     )
