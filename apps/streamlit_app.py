@@ -51,7 +51,7 @@ with st.sidebar:
     st.number_input("LLM max retries (on 429/5xx)", key="LLM_MAX_RETRIES", min_value=0, value=int(os.getenv("LLM_MAX_RETRIES", "5")))
     st.number_input("LLM backoff base (ms)", key="LLM_BACKOFF_BASE_MS", min_value=0, value=int(os.getenv("LLM_BACKOFF_BASE_MS", "800")))
     st.number_input("LLM backoff max (ms)", key="LLM_BACKOFF_MAX_MS", min_value=0, value=int(os.getenv("LLM_BACKOFF_MAX_MS", "8000")))
-    st.number_input("LLM prompt max chars (cap)", key="LLM_MAX_CHARS", min_value=20000, value=int(os.getenv("LLM_MAX_CHARS", "90000")))
+    st.number_input("LLM prompt max chars (cap)", key="LLM_MAX_CHARS", min_value=8000, value=int(os.getenv("LLM_MAX_CHARS", "90000")))
 
     # Key badges
     openai_ok = bool(os.getenv("OPENAI_API_KEY"))
